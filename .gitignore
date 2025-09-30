@@ -1,0 +1,8 @@
+models/*.pkl
+models/*.joblib
+models/*.pth
+trading_platforms/models/*.pkl
+trading_platforms/models/*.joblib
+trading_platforms/models/*.pth
+*/models/*
+*/models/*
