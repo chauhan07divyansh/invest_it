@@ -109,129 +109,110 @@ class TradingAPI:
 
         cleaned_data = fundamentals.copy()
 
-
-        if 'debt_to_equity' in cleaned_data and isinstance(cleaned_data['debt_to_equity'], (int, float)):
-            if cleaned_data['debt_to_equity'] > 3.0:
-                cleaned_data['debt_to_equity'] = round(cleaned_data['debt_to_equity'] / 100, 3)
-
-
-        if 'book_value' in cleaned_data and isinstance(cleaned_data['book_value'], (int, float)):
-            if cleaned_data['book_value'] < 10:
-                cleaned_data['book_value'] = round(cleaned_data['book_value'] * 100, 2)
-
-
-        if 'price_to_book' in cleaned_data and isinstance(cleaned_data['price_to_book'], (int, float)):
-            if cleaned_data['price_to_book'] > 100:
-                cleaned_data['price_to_book'] = round(cleaned_data['price_to_book'] / 50, 2)
-
-
-        if 'price_to_sales' in cleaned_data and isinstance(cleaned_data['price_to_sales'], (int, float)):
-            if cleaned_data['price_to_sales'] > 50:
-                cleaned_data['price_to_sales'] = round(cleaned_data['price_to_sales'] / 30, 2)
-
-
-        if 'pe_ratio' in cleaned_data and isinstance(cleaned_data['pe_ratio'], (int, float)):
-            if cleaned_data['pe_ratio'] < 10 or cleaned_data['pe_ratio'] > 100:
-                cleaned_data['pe_ratio'] = round(cleaned_data['pe_ratio'] * 2.5, 2)
-
-
-        if 'dividend_yield' in cleaned_data and isinstance(cleaned_data['dividend_yield'], (int, float)):
-            if cleaned_data['dividend_yield'] > 10:
-                cleaned_data['dividend_yield'] = round(cleaned_data['dividend_yield'] / 10, 2)
-
+        if 'debt_to_equity' in cleaned_data and isinstance(cleaned_data['debt_to_equity'], (int, float)) and \
+                cleaned_data['debt_to_equity'] > 3.0:
+            cleaned_data['debt_to_equity'] = round(cleaned_data['debt_to_equity'] / 100, 3)
 
         for key in ['market_cap', 'enterprise_value']:
             if key in cleaned_data and isinstance(cleaned_data[key], (int, float)):
                 cleaned_data[key] = f"{cleaned_data[key]:,}"
 
-
-        for key in ['operating_margin', 'profit_margin', 'revenue_growth', 'earnings_growth']:
+        for key in ['operating_margin', 'profit_margin', 'revenue_growth', 'earnings_growth', 'dividend_yield']:
             if key in cleaned_data and isinstance(cleaned_data[key], float) and abs(cleaned_data[key]) < 1:
                 cleaned_data[key] = f"{cleaned_data[key] * 100:.2f}%"
 
         return cleaned_data
 
-    def calculate_target_price(self, result, system_type):
-        current_price = result.get('current_price', 0)
-        if current_price <= 0: return 0.0
+    def extract_targets_from_backend(self, result):
+        """Extract all three targets from backend trading plan."""
+        try:
+            backend_plan = result.get('trading_plan', {})
+            targets = backend_plan.get('targets', {})
 
-        score_key = 'swing_score' if system_type == 'Swing' else 'position_score'
-        ai_score = result.get(score_key, 0)
-
-        multiplier = 1.0
-
-        if system_type == 'Swing':
-            if ai_score >= 80:
-                multiplier = 1.15
-            elif ai_score >= 70:
-                multiplier = 1.10
-            elif ai_score >= 60:
-                multiplier = 1.07
-            else:
-                multiplier = 1.04
-
-        else:  # Position
-            if ai_score >= 80:
-                multiplier = 1.50
-            elif ai_score >= 70:
-                multiplier = 1.35
-            elif ai_score >= 60:
-                multiplier = 1.25
-            else:
-                multiplier = 1.20
-
-        rsi = result.get('technical_indicators', {}).get('rsi', 50)
-        if rsi < 30:
-            multiplier += 0.02
-        elif rsi > 70:
-            multiplier -= 0.02
-
-        return current_price * multiplier
+            return {
+                'target_1': float(targets.get('target_1', 0)) if targets.get('target_1') else 0,
+                'target_2': float(targets.get('target_2', 0)) if targets.get('target_2') else 0,
+                'target_3': float(targets.get('target_3', 0)) if targets.get('target_3') else 0,
+            }
+        except Exception as e:
+            logger.warning(f"Error extracting targets from backend: {e}")
+            return {'target_1': 0, 'target_2': 0, 'target_3': 0}
 
     def generate_trading_plan(self, result, system_type):
-        score_key = 'swing_score' if system_type == 'Swing' else 'position_score'
-        score = result.get(score_key, 0)
+        """Generate trading plan using backend logic with all targets and trailing stops."""
+        try:
+            backend_plan = result.get('trading_plan', {})
+
+            if not backend_plan:
+                logger.warning("No backend trading plan found")
+                return self._fallback_trading_plan(result)
+
+            entry_signal = backend_plan.get('entry_signal', 'HOLD/WATCH')
+            entry_strategy = backend_plan.get('entry_strategy', 'Wait for clearer signals')
+            stop_loss = backend_plan.get('stop_loss', 0)
+            targets = backend_plan.get('targets', {})
+            trade_management_note = backend_plan.get('trade_management_note', '')
+
+            current_price = result.get('current_price', 0)
+
+            # Format the complete trading plan
+            formatted_plan = {
+                'signal': entry_signal,
+                'strategy': self._enhance_strategy_description(entry_strategy, entry_signal, system_type),
+                'entry_price': f"Around {current_price:.2f}" if current_price > 0 else 'N/A',
+                'stop_loss': f"{stop_loss:.2f}" if isinstance(stop_loss, (int, float)) and stop_loss > 0 else 'N/A',
+                'target_1': f"{targets.get('target_1', 0):.2f}" if targets.get('target_1') else 'N/A',
+                'target_2': f"{targets.get('target_2', 0):.2f}" if targets.get('target_2') else 'N/A',
+                'target_3': f"{targets.get('target_3', 0):.2f}" if targets.get('target_3') else 'N/A',
+                'trailing_stop_advice': trade_management_note if trade_management_note else 'Consider moving stop loss to breakeven after hitting Target 1.',
+            }
+
+            return formatted_plan
+
+        except Exception as e:
+            logger.error(f"Error generating trading plan: {e}")
+            return self._fallback_trading_plan(result)
+
+    def _enhance_strategy_description(self, base_strategy, signal, system_type):
+        """Enhance the strategy description with context."""
+        sentiment = signal.lower()
+
+        if "strong buy" in sentiment:
+            return f"A high-conviction BUY signal for {system_type.lower()} trading. {base_strategy}"
+        elif "buy" in sentiment:
+            return f"A solid BUY opportunity for {system_type.lower()} trading. {base_strategy}"
+        elif "hold" in sentiment:
+            return f"Neutral stance recommended. {base_strategy}"
+        elif "sell" in sentiment or "avoid" in sentiment:
+            return f"Caution advised. {base_strategy}"
+        else:
+            return base_strategy
+
+    def _fallback_trading_plan(self, result):
+        """Fallback trading plan if backend plan is unavailable."""
         current_price = result.get('current_price', 0)
-        target_price = self.calculate_target_price(result, system_type)
-        sentiment = result.get('sentiment', {}).get('overall_sentiment', 'Neutral').lower()
-
-        if current_price <= 0:
-            return {'signal': 'UNAVAILABLE', 'strategy': 'Price data not available.', 'entry_price': 'N/A',
-                    'stop_loss': 'N/A', 'target_price': 'N/A'}
-
-        signal = "AVOID"
-        strategy = "The stock does not meet the criteria for a favorable entry. The risk/reward ratio is not optimal at the current price."
-
-        if score >= 80:
-            signal = "STRONG BUY"
-            strategy = f"A high-conviction BUY signal driven by an excellent AI score. The analysis indicates strong potential for upward movement in the {system_type.lower()} horizon, supported by a '{sentiment}' market sentiment."
-        elif score >= 70:
-            signal = "BUY"
-            strategy = f"A solid BUY signal based on a good AI score. The stock shows positive indicators for a {system_type.lower()} trade, aligning with the current '{sentiment}' sentiment."
-        elif score >= 60:
-            signal = "HOLD / MONITOR"
-            strategy = "The stock shows neutral to slightly positive signs. It's recommended to hold existing positions and monitor for a stronger buy signal before entering. The current setup lacks a clear catalyst."
-        elif score >= 50:
-            signal = "HOLD / MONITOR"
-            strategy = "The technical and fundamental signals are mixed. While not a sell signal, caution is advised. Wait for a clearer trend to emerge before committing new capital."
-        else:  # score < 50
-            strategy = "The analysis suggests potential weakness or unfavorable conditions for this stock. It is advised to avoid this stock and look for stronger opportunities elsewhere."
-
-        stop_loss_percentage = 0.95 if system_type == 'Swing' else 0.90
-        stop_loss = current_price * stop_loss_percentage if "BUY" in signal else "N/A"
-
         return {
-            'signal': signal, 'strategy': strategy, 'entry_price': f"Around {current_price:.2f}",
-            'stop_loss': f"{stop_loss:.2f}" if isinstance(stop_loss, float) else stop_loss,
-            'target_price': f"{target_price:.2f}",
+            'signal': 'UNAVAILABLE',
+            'strategy': 'Trading plan not available from backend system.',
+            'entry_price': f"Around {current_price:.2f}" if current_price > 0 else 'N/A',
+            'stop_loss': 'N/A',
+            'target_price': 'N/A',
         }
 
     def format_analysis_response(self, result, system_type):
-        if not result: return None
+        """Format analysis response using backend data."""
+        if not result:
+            return None
+
         score_key = 'swing_score' if system_type == 'Swing' else 'position_score'
         score = result.get(score_key, 0)
         current_price = result.get('current_price', 0)
-        target_price = self.calculate_target_price(result, system_type)
+
+        all_targets = self.extract_targets_from_backend(result)
+        target_price = all_targets.get('target_2', 0)
+        if target_price == 0:
+            target_price = all_targets.get('target_1', current_price)
+
         potential_return = ((target_price - current_price) / current_price) * 100 if current_price > 0 else 0
 
         grade = "D (Poor)"
@@ -253,6 +234,14 @@ class TradingAPI:
 
         cleaned_fundamentals = self._clean_fundamental_data(result.get('fundamentals', {}))
 
+        system_technicals = result.get('technical_indicators', {})
+        final_technicals = {}
+        for key, value in system_technicals.items():
+            if isinstance(value, (int, float)):
+                final_technicals[key] = round(value, 2)
+            else:
+                final_technicals[key] = value
+
         return {
             'symbol': result.get('symbol', 'N/A'),
             'company_name': result.get('company_name', 'N/A'),
@@ -264,39 +253,69 @@ class TradingAPI:
             'target_price': target_price,
             'potential_return': potential_return,
             'trading_plan': trading_plan,
-            'technical_indicators': result.get('technical_indicators', {}),
+            'technical_indicators': final_technicals,
             'fundamentals': cleaned_fundamentals,
             'sentiment': sentiment_data,
             'time_horizon': "1-4 weeks" if system_type == "Swing" else "6-18 months"
         }
 
-    def _calculate_shares(self, portfolio_list):
+    def _standardize_portfolio_keys(self, portfolio_list):
+        if not portfolio_list:
+            return []
+
+        standardized_list = []
         for item in portfolio_list:
-            investment_amount = item.get('investment_amount', 0)
-            price = item.get('price', item.get('current_price', 0))
-            if price > 0:
-                item['number_of_shares'] = math.floor(investment_amount / price)
-            else:
-                item['number_of_shares'] = 0
-        return portfolio_list
+            # More robustly extract values with multiple fallbacks, mirroring frontend logic
+            price = item.get('price') or item.get('current_price') or item.get('entry_price') or item.get(
+                'avg_price') or item.get('ltp') or 0
+            stop_loss = item.get('stop_loss') or item.get('stoploss') or item.get('sl') or item.get('stop') or 0
+            alloc = item.get('percentage_allocation') or item.get('allocation_pct') or item.get(
+                'alloc_percent') or item.get('allocation') or 0
+            shares = item.get('number_of_shares') or item.get('shares') or item.get('qty') or item.get('quantity') or 0
+            risk = item.get('risk') or item.get('risk_amount') or item.get('max_risk') or 0
+
+            new_item = {
+                'symbol': item.get('symbol') or item.get('ticker'),
+                'company': item.get('company') or item.get('name'),
+                'score': item.get('score'),
+                'price': price,
+                'stop_loss': stop_loss,
+                'risk': risk,
+                'investment_amount': item.get('amount') or item.get('investment_amount'),
+                'number_of_shares': shares,
+                'percentage_allocation': alloc
+            }
+            standardized_list.append(new_item)
+        return standardized_list
 
     def generate_swing_portfolio(self, budget, risk_appetite):
-        if not self.swing_system: raise ConnectionAbortedError('Swing trading system not available')
+        if not self.swing_system:
+            raise ConnectionAbortedError('Swing trading system not available')
         all_stocks = self.swing_system.get_all_stock_symbols()
         all_results = self.swing_system.analyze_multiple_stocks(all_stocks)
         filtered = self.swing_system.filter_stocks_by_risk_appetite(all_results, risk_appetite)
         portfolio_list = self.swing_system.generate_portfolio_allocation(filtered, budget, risk_appetite)
-        portfolio_with_shares = self._calculate_shares(portfolio_list)
-        total_allocated = sum(item.get('investment_amount', 0) for item in portfolio_with_shares)
-        avg_score = sum(item.get('score', 0) for item in portfolio_with_shares) / len(
-            portfolio_with_shares) if portfolio_with_shares else 0
-        return {'portfolio': portfolio_with_shares,
-                'summary': {'total_budget': budget, 'total_allocated': total_allocated,
-                            'remaining_cash': budget - total_allocated, 'diversification': len(portfolio_with_shares),
-                            'average_score': avg_score, }}
+
+        standardized_portfolio = self._standardize_portfolio_keys(portfolio_list)
+
+        total_allocated = sum(item.get('investment_amount', 0) for item in standardized_portfolio)
+        avg_score = sum(item.get('score', 0) for item in standardized_portfolio) / len(
+            standardized_portfolio) if standardized_portfolio else 0
+
+        return {
+            'portfolio': standardized_portfolio,
+            'summary': {
+                'total_budget': budget,
+                'total_allocated': total_allocated,
+                'remaining_cash': budget - total_allocated,
+                'diversification': len(standardized_portfolio),
+                'average_score': avg_score,
+            }
+        }
 
     def generate_position_portfolio(self, budget, risk_appetite, time_period):
-        if not self.position_system: raise ConnectionAbortedError('Position trading system not available')
+        if not self.position_system:
+            raise ConnectionAbortedError('Position trading system not available')
         results = self.position_system.create_personalized_portfolio(risk_appetite, time_period, budget)
         portfolio_data = results.get('portfolio', {})
         portfolio_list = []
@@ -306,14 +325,22 @@ class TradingAPI:
                 portfolio_list.append(details)
         else:
             portfolio_list = portfolio_data
-        portfolio_with_shares = self._calculate_shares(portfolio_list)
-        total_allocated = sum(item.get('investment_amount', 0) for item in portfolio_with_shares)
-        avg_score = sum(item.get('score', 0) for item in portfolio_with_shares) / len(
-            portfolio_with_shares) if portfolio_with_shares else 0
-        return {'portfolio': portfolio_with_shares,
-                'summary': {'total_budget': budget, 'total_allocated': total_allocated,
-                            'remaining_cash': budget - total_allocated, 'diversification': len(portfolio_with_shares),
-                            'average_score': avg_score, }}
+
+        standardized_portfolio = self._standardize_portfolio_keys(portfolio_list)
+
+        total_allocated = sum(item.get('investment_amount', 0) for item in standardized_portfolio)
+        avg_score = sum(item.get('score', 0) for item in standardized_portfolio) / len(
+            standardized_portfolio) if standardized_portfolio else 0
+        return {
+            'portfolio': standardized_portfolio,
+            'summary': {
+                'total_budget': budget,
+                'total_allocated': total_allocated,
+                'remaining_cash': budget - total_allocated,
+                'diversification': len(standardized_portfolio),
+                'average_score': avg_score,
+            }
+        }
 
 
 trading_api = TradingAPI()
@@ -323,8 +350,10 @@ trading_api = TradingAPI()
 @app.route('/api/stocks', methods=['GET'])
 def get_all_stocks():
     cache_key = "all_stocks"
-    if cached := get_from_cache(cache_key): return jsonify({'success': True, 'data': cached})
-    if not trading_api.swing_system: return jsonify({'success': False, 'error': 'Trading system not available'}), 503
+    if cached := get_from_cache(cache_key):
+        return jsonify({'success': True, 'data': cached})
+    if not trading_api.swing_system:
+        return jsonify({'success': False, 'error': 'Trading system not available'}), 503
     stocks = trading_api.swing_system.get_all_stock_symbols()
     result = {'stocks': stocks, 'total_count': len(stocks)}
     set_cache(cache_key, result)
@@ -335,13 +364,16 @@ def analyze_stock(system_type, symbol):
     try:
         symbol = validate_symbol(symbol)
         cache_key = f"{system_type}_analysis_{symbol}"
-        if cached := get_from_cache(cache_key): return jsonify({'success': True, 'data': cached})
+        # if cached := get_from_cache(cache_key):
+        #     return jsonify({'success': True, 'data': cached})
         system = getattr(trading_api, f"{system_type}_system")
-        if not system: return jsonify(
-            {'success': False, 'error': f'{system_type.capitalize()} trading system not available'}), 503
+        if not system:
+            return jsonify(
+                {'success': False, 'error': f'{system_type.capitalize()} trading system not available'}), 503
         analysis_func = getattr(system, f"analyze_{system_type}_trading_stock")
         result = analysis_func(symbol)
-        if not result: return jsonify({'success': False, 'error': f'Could not analyze stock {symbol}'}), 404
+        if not result:
+            return jsonify({'success': False, 'error': f'Could not analyze stock {symbol}'}), 404
         formatted_result = trading_api.format_analysis_response(result, system_type.capitalize())
         set_cache(cache_key, formatted_result)
         return jsonify({'success': True, 'data': formatted_result})
@@ -353,18 +385,21 @@ def analyze_stock(system_type, symbol):
 
 
 @app.route('/api/analyze/swing/<symbol>', methods=['GET'])
-def analyze_swing_stock_endpoint(symbol): return analyze_stock('swing', symbol)
+def analyze_swing_stock_endpoint(symbol):
+    return analyze_stock('swing', symbol)
 
 
 @app.route('/api/analyze/position/<symbol>', methods=['GET'])
-def analyze_position_stock_endpoint(symbol): return analyze_stock('position', symbol)
+def analyze_position_stock_endpoint(symbol):
+    return analyze_stock('position', symbol)
 
 
 @app.route('/api/portfolio/swing', methods=['POST'])
 def create_swing_portfolio_endpoint():
     try:
         data = request.get_json()
-        if not data: return jsonify({'success': False, 'error': 'Request body cannot be empty'}), 400
+        if not data:
+            return jsonify({'success': False, 'error': 'Request body cannot be empty'}), 400
         budget = validate_budget(data.get('budget'))
         risk = validate_risk_appetite(data.get('risk_appetite'))
         result = trading_api.generate_swing_portfolio(budget, risk)
@@ -380,7 +415,8 @@ def create_swing_portfolio_endpoint():
 def create_position_portfolio_endpoint():
     try:
         data = request.get_json()
-        if not data: return jsonify({'success': False, 'error': 'Request body cannot be empty'}), 400
+        if not data:
+            return jsonify({'success': False, 'error': 'Request body cannot be empty'}), 400
         budget = validate_budget(data.get('budget'))
         risk = validate_risk_appetite(data.get('risk_appetite'))
         time_period = validate_time_period(data.get('time_period'))
@@ -398,13 +434,16 @@ def compare_strategies_endpoint(symbol):
     try:
         symbol = validate_symbol(symbol)
         cache_key = f"compare_{symbol}"
-        if cached := get_from_cache(cache_key): return jsonify({'success': True, 'data': cached})
-        if not trading_api.swing_system or not trading_api.position_system: return jsonify(
-            {'success': False, 'error': 'One or more trading systems are unavailable'}), 503
+        if cached := get_from_cache(cache_key):
+            return jsonify({'success': True, 'data': cached})
+        if not trading_api.swing_system or not trading_api.position_system:
+            return jsonify(
+                {'success': False, 'error': 'One or more trading systems are unavailable'}), 503
         swing_result = trading_api.swing_system.analyze_swing_trading_stock(symbol)
         position_result = trading_api.position_system.analyze_position_trading_stock(symbol)
-        if not swing_result or not position_result: return jsonify(
-            {'success': False, 'error': f'Could not complete comparison for {symbol}'}), 404
+        if not swing_result or not position_result:
+            return jsonify(
+                {'success': False, 'error': f'Could not complete comparison for {symbol}'}), 404
         swing_formatted = trading_api.format_analysis_response(swing_result, 'Swing')
         position_formatted = trading_api.format_analysis_response(position_result, 'Position')
         result = {'swing_analysis': swing_formatted, 'position_analysis': position_formatted}
@@ -419,11 +458,13 @@ def compare_strategies_endpoint(symbol):
 
 # --- Error Handlers ---
 @app.errorhandler(404)
-def not_found(error): return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
+def not_found(error):
+    return jsonify({'success': False, 'error': 'Endpoint not found'}), 404
 
 
 @app.errorhandler(500)
-def internal_error(error): return jsonify({'success': False, 'error': 'Internal server error'}), 500
+def internal_error(error):
+    return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 
 if __name__ == '__main__':
