@@ -1631,99 +1631,136 @@ class EnhancedPositionTradingSystem:
             return 50
 
     def generate_position_trading_plan(self, data, score, risk_metrics, fundamentals, trends):
-        """Generate comprehensive position trading plan"""
+        """
+        Generate realistic position trading plan for 6-18 month holding periods.
+        Position trading targets are more conservative than swing trading due to:
+        - Longer holding periods allow fundamental value to materialize
+        - Lower transaction costs justify patience
+        - Focus on quality over quick gains
+        """
+        default_plan = {
+            'entry_signal': 'ERROR',
+            'entry_strategy': 'Analysis failed',
+            'entry_timing': 'Unknown',
+            'stop_loss': 0,
+            'targets': {'target_1': 0, 'target_2': 0, 'target_3': 0},
+            'support': 0,
+            'resistance': 0,
+            'holding_period': 'Unknown',
+            'trade_management_note': 'Unable to generate plan',
+            'stop_distance_pct': 0,
+            'upside_potential': 0
+        }
+
         try:
             current_price = data['Close'].iloc[-1]
             atr = risk_metrics.get('atr', current_price * 0.02)
 
-            # Position trading signals (more conservative)
+            if pd.isna(atr) or atr <= 0:
+                atr = current_price * 0.02
+
+            # Entry signal and strategy based on score
             if score >= 80:
                 entry_signal = "STRONG BUY"
-                entry_strategy = "Accumulate on any dips, suitable for core holding"
+                entry_strategy = "Accumulate on dips; high conviction core holding"
+                holding_period = "12-24 months"
             elif score >= 65:
                 entry_signal = "BUY"
-                entry_strategy = "Enter gradually over 2-4 weeks, good long-term prospect"
-            elif score >= 50:
+                entry_strategy = "Enter gradually over 2-4 weeks; good long-term prospects"
+                holding_period = "9-18 months"
+            elif score >= 40:
                 entry_signal = "HOLD/WATCH"
                 entry_strategy = "Wait for better entry or more confirmation"
-            elif score >= 35:
-                entry_signal = "WEAK"
-                entry_strategy = "Avoid for position trading, too risky"
+                holding_period = "Monitor for opportunity"
             else:
                 entry_signal = "AVOID"
-                entry_strategy = "Not suitable for position trading"
+                entry_strategy = "Fundamental or technical weaknesses detected"
+                holding_period = "Not recommended"
 
-            # Position sizing for long-term (wider stops, smaller risk per trade)
-            stop_loss_distance = atr * 4  # 4 ATR for position trading
+            # Stop-Loss: Wider for position trading (7-10% typical)
+            # Use 3x ATR, capped at 10% to limit downside
+            stop_loss_distance = min(atr * 3.0, current_price * 0.10)
             stop_loss = max(current_price - stop_loss_distance, 0)
 
-            # Long-term targets (higher multiples)
-            target_1 = current_price + (stop_loss_distance * 2.0)  # 2:1 RR (conservative)
-            target_2 = current_price + (stop_loss_distance * 4.0)  # 4:1 RR (primary target)
-            target_3 = current_price + (stop_loss_distance * 6.0)  # 6:1 RR (stretch target)
-
-            # Support and Resistance with longer timeframes
+            # Support and Resistance (longer 100-day window for position trading)
             support, resistance = self.calculate_support_resistance(data, window=100)
             if not support or pd.isna(support):
                 support = current_price * 0.90
             if not resistance or pd.isna(resistance):
                 resistance = current_price * 1.15
 
-            # Expected holding period based on score
-            if score >= 75:
-                holding_period = "6 months to 2 years (high conviction)"
-            elif score >= 60:
-                holding_period = "3 months to 1.5 years (medium conviction)"
-            else:
-                holding_period = "Not recommended for position trading"
+            # Adjust stop-loss to be above major support
+            if support > 0:
+                stop_loss = max(stop_loss, support * 0.97)
 
-            # Entry timing recommendations
+            # REALISTIC POSITION TRADING TARGETS
+            # For 6-18 month holds, expecting 15-35% total gains is reasonable
+            # Using progressive risk-reward ratios: 1.5:1, 2.5:1, 3.5:1
+
+            target_1 = current_price + (stop_loss_distance * 1.5)  # ~10-15% gain
+            target_2 = current_price + (stop_loss_distance * 2.5)  # ~17-25% gain
+            target_3 = current_price + (stop_loss_distance * 3.5)  # ~24-35% gain
+
+            # Cap targets at realistic resistance levels
+            # Don't set targets more than 35% above current price
+            max_reasonable_target = current_price * 1.35
+
+            target_1 = min(target_1, current_price * 1.15)  # Cap at 15%
+            target_2 = min(target_2, current_price * 1.25)  # Cap at 25%
+            target_3 = min(target_3, max_reasonable_target)  # Cap at 35%
+
+            # Ensure targets are progressive and above entry
+            if target_1 <= current_price:
+                target_1 = current_price * 1.10
+            if target_2 <= target_1:
+                target_2 = current_price * 1.20
+            if target_3 <= target_2:
+                target_3 = current_price * 1.30
+
+            # Entry Timing based on trend
             ma_200 = trends.get('ma_200', current_price)
-            if current_price > ma_200:
-                entry_timing = "Buy on any pullback to major support"
+            if current_price > ma_200 * 1.02:
+                entry_timing = "Buy on pullbacks to support or continue accumulating"
+            elif current_price > ma_200 * 0.98:
+                entry_timing = "Price near long-term trend; wait for bullish confirmation"
             else:
-                entry_timing = "Wait for price to reclaim long-term trend (MA200)"
+                entry_timing = "Wait for price to reclaim 200-day moving average"
 
-            # Risk management for position trading
-            position_risk = "1% of portfolio maximum per position"
-            portfolio_risk = "Maximum 5% total portfolio risk"
+            # Calculate metrics
+            stop_distance_pct = ((current_price - stop_loss) / current_price) * 100
+            upside_potential = ((target_2 - current_price) / current_price) * 100
+            risk_reward_ratio = upside_potential / stop_distance_pct if stop_distance_pct > 0 else 0
+
+            # Trade management note
+            trade_management_note = (
+                "Position trading approach: Book 1/3 position at each target. "
+                "Trail stop loss to breakeven after Target 1. "
+                "Review quarterly and adjust based on fundamental changes."
+            )
 
             return {
                 'entry_signal': entry_signal,
                 'entry_strategy': entry_strategy,
                 'entry_timing': entry_timing,
-                'stop_loss': stop_loss,
+                'stop_loss': round(stop_loss, 2),
                 'targets': {
-                    'target_1': target_1,
-                    'target_2': target_2,
-                    'target_3': target_3
+                    'target_1': round(target_1, 2),
+                    'target_2': round(target_2, 2),
+                    'target_3': round(target_3, 2)
                 },
-                'support': support,
-                'resistance': resistance,
+                'support': round(support, 2),
+                'resistance': round(resistance, 2),
                 'holding_period': holding_period,
-                'position_risk': position_risk,
-                'portfolio_risk': portfolio_risk,
-                'stop_distance_pct': (stop_loss_distance / current_price) * 100,
-                'upside_potential': ((target_2 - current_price) / current_price) * 100
+                'trade_management_note': trade_management_note,
+                'stop_distance_pct': round(stop_distance_pct, 2),
+                'upside_potential': round(upside_potential, 2),
+                'risk_reward_ratio': round(risk_reward_ratio, 2)
             }
 
         except Exception as e:
             logger.error(f"Error generating position trading plan: {str(e)}")
-            return {
-                'entry_signal': 'ERROR',
-                'entry_strategy': 'Analysis failed',
-                'entry_timing': 'Unknown',
-                'stop_loss': 0,
-                'targets': {'target_1': 0, 'target_2': 0, 'target_3': 0},
-                'support': 0,
-                'resistance': 0,
-                'holding_period': 'Unknown',
-                'position_risk': '1% max',
-                'portfolio_risk': '5% max',
-                'stop_distance_pct': 0,
-                'upside_potential': 0
-            }
-
+            logger.error(traceback.format_exc())
+            return default_plan
     # Helper methods for technical analysis
     def safe_rolling_calculation(self, data, window, operation='mean'):
         """Safely perform rolling calculations"""
