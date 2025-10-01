@@ -1096,27 +1096,26 @@ class EnhancedSwingTradingSystem:
             logger.error(f"Error calculating risk metrics: {str(e)}")
             return default_metrics
 
-
     def generate_trading_plan(self, data, score, risk_metrics):
-        """Generate complete trading plan with comprehensive error handling and trade management advice."""
+        """Generate complete trading plan with realistic targets for swing trading (1-4 weeks)."""
         default_plan = {
             'entry_signal': "HOLD/WATCH",
             'entry_strategy': "Wait for clearer signals",
             'stop_loss': 0,
             'targets': {'target_1': 0, 'target_2': 0, 'target_3': 0},
             'holding_period': f"{self.swing_trading_params['min_holding_period']}-{self.swing_trading_params['max_holding_period']} days",
-            'trade_management_note': 'N/A'  # Added default for consistency
+            'trade_management_note': 'N/A'
         }
 
         try:
             current_price = data['Close'].iloc[-1]
             atr = risk_metrics.get('atr', current_price * 0.02)
-            if pd.isna(atr) or atr <= 0: atr = current_price * 0.02
+            if pd.isna(atr) or atr <= 0:
+                atr = current_price * 0.02
 
-            # --- STRATEGY IMPROVEMENT BASED ON BACKTEST ---
-            trade_management_note = "After hitting Target 1, consider moving Stop Loss to breakeven to let profits run."
+            trade_management_note = "After hitting Target 1, move Stop Loss to breakeven. Trail stops as price advances to lock in profits."
 
-            # Entry Strategy
+            # Entry Strategy based on score
             if score >= 75:
                 entry_signal = "STRONG BUY"
             elif score >= 60:
@@ -1129,37 +1128,49 @@ class EnhancedSwingTradingSystem:
                 entry_signal = "STRONG SELL"
 
             entry_strategy_map = {
-                "STRONG BUY": "Enter aggressively on any dip",
-                "BUY": "Enter on pullbacks or breakouts",
-                "HOLD/WATCH": "Wait for clearer signals",
-                "SELL": "Exit longs, consider shorts",
-                "STRONG SELL": "Exit all positions"
+                "STRONG BUY": "Enter on any pullback or at market. Strong momentum and favorable conditions.",
+                "BUY": "Enter on minor dips or breakouts above resistance. Good risk-reward setup.",
+                "HOLD/WATCH": "Wait for clearer signals. Current setup lacks strong conviction.",
+                "SELL": "Exit long positions. Consider taking profits or avoiding new entries.",
+                "STRONG SELL": "Exit all positions immediately. Unfavorable conditions detected."
             }
             entry_strategy = entry_strategy_map.get(entry_signal, "Wait for clearer signals")
 
-            # Price Targets
-            stop_loss_distance = atr * 2
+            # REALISTIC PRICE TARGETS for Swing Trading
+            stop_loss_distance = atr * 1.5
             stop_loss = max(current_price - stop_loss_distance, 0)
-            target_1 = current_price + (stop_loss_distance * 1.5)
-            target_2 = current_price + (stop_loss_distance * 2.5)
-            target_3 = current_price + (stop_loss_distance * 4.0)
 
-            support, resistance = self.calculate_support_resistance(data)
+            # Simple, conservative targets based on ATR
+            target_1 = current_price + (stop_loss_distance * 1.0)  # 1:1 RR
+            target_2 = current_price + (stop_loss_distance * 1.5)  # 1:1.5 RR
+            target_3 = current_price + (stop_loss_distance * 2.0)  # 1:2 RR
+
+            # IMPORTANT: Ensure targets are always ABOVE current price
+            if target_1 <= current_price or target_2 <= current_price or target_3 <= current_price:
+                logger.warning(f"Invalid targets detected for {data.name}, recalculating...")
+                # Fallback: use percentage-based targets
+                target_1 = current_price * 1.03  # 3% gain
+                target_2 = current_price * 1.05  # 5% gain
+                target_3 = current_price * 1.08  # 8% gain
 
             return {
                 'entry_signal': entry_signal,
                 'entry_strategy': entry_strategy,
                 'stop_loss': stop_loss,
-                'targets': {'target_1': target_1, 'target_2': target_2, 'target_3': target_3},
-                'support': support or current_price * 0.95,
-                'resistance': resistance or current_price * 1.05,
+                'targets': {
+                    'target_1': target_1,
+                    'target_2': target_2,
+                    'target_3': target_3
+                },
+                'support': None,  # Remove support/resistance from here - causes issues
+                'resistance': None,
                 'holding_period': f"{self.swing_trading_params['min_holding_period']}-{self.swing_trading_params['max_holding_period']} days",
                 'trade_management_note': trade_management_note
             }
+
         except Exception as e:
             logger.error(f"Error generating trading plan: {str(e)}")
             return default_plan
-
 
     def analyze_swing_trading_stock(self, symbol, period="6mo"):
         """Comprehensive swing trading analysis for a single stock with full error handling"""
@@ -1382,44 +1393,45 @@ class EnhancedSwingTradingSystem:
 
     def generate_portfolio_allocation(self, results, total_capital, risk_appetite):
         """
-        IMPROVED VERSION - Generate diversified portfolio allocation with better position sizing
+        Generate diversified portfolio allocation with structured JSON return.
+        Returns list of dicts with numeric values for API consumption.
         """
         try:
             if not results or not isinstance(results, list):
-                print("Error: No suitable stocks found for portfolio creation")
+                logger.error("No suitable stocks found for portfolio creation")
                 return None
 
             if total_capital <= 0:
-                print("Error: Invalid total capital amount")
+                logger.error("Invalid total capital amount")
                 return None
 
             # Diversification parameters
-            max_positions = min(10, len(results))  # Maximum 10 positions for diversification
-            min_positions = min(5, len(results))  # Minimum 5 positions if available
+            max_positions = min(10, len(results))
+            min_positions = min(5, len(results))
 
             # Risk parameters
             risk_per_trade_pct = self.swing_trading_params['risk_per_trade']
-            max_position_size_pct = 0.20  # Maximum 20% of capital per position
+            max_position_size_pct = 0.20
 
-            # Calculate ideal position size for diversification
+            # Calculate ideal position size
             if len(results) >= min_positions:
                 ideal_positions = min(max_positions, len(results))
                 base_allocation_per_stock = total_capital / ideal_positions
             else:
                 base_allocation_per_stock = total_capital / len(results)
 
-            print(f"\nIMPROVED PORTFOLIO ALLOCATION (Total Capital: Rs.{total_capital:,.2f})")
+            # Console output (keep for logging)
+            print(f"\nPORTFOLIO ALLOCATION (Total Capital: Rs.{total_capital:,.2f})")
             print(
                 f"Diversification Target: {min(ideal_positions if len(results) >= min_positions else len(results), max_positions)} positions")
             print(
                 f"Risk Model: Max {risk_per_trade_pct:.0%} risk per trade, Max {max_position_size_pct:.0%} per position")
             print("=" * 110)
-
-            portfolio_data = []
             print(
                 f"{'Rank':<4} {'Symbol':<12} {'Company':<25} {'Score':<6} {'Price':<10} {'Stop Loss':<10} {'Allocation':<12} {'Shares':<8} {'Risk':<12}")
             print("-" * 110)
 
+            portfolio_data = []
             total_allocated = 0
             position_count = 0
             target_positions = min(ideal_positions if len(results) >= min_positions else len(results), max_positions)
@@ -1437,148 +1449,97 @@ class EnhancedSwingTradingSystem:
                     if current_price <= 0 or stop_loss <= 0 or current_price <= stop_loss:
                         continue
 
-                    # Calculate position size using multiple methods and take the minimum
                     risk_per_share = current_price - stop_loss
 
-                    # Method 1: Risk-based position sizing
+                    # Position sizing calculations (your existing logic)
                     capital_at_risk = total_capital * risk_per_trade_pct
                     risk_based_shares = int(capital_at_risk / risk_per_share)
-                    risk_based_amount = risk_based_shares * current_price
 
-                    # Method 2: Equal weight allocation (for diversification)
                     equal_weight_amount = base_allocation_per_stock
                     equal_weight_shares = int(equal_weight_amount / current_price)
 
-                    # Method 3: Score-weighted allocation
                     score_weight = swing_score / 100.0
-                    score_weighted_amount = base_allocation_per_stock * (
-                                0.7 + 0.3 * score_weight)  # 70% base + 30% score bonus
+                    score_weighted_amount = base_allocation_per_stock * (0.7 + 0.3 * score_weight)
                     score_weighted_shares = int(score_weighted_amount / current_price)
 
-                    # Method 4: Maximum position size limit
                     max_position_amount = total_capital * max_position_size_pct
                     max_position_shares = int(max_position_amount / current_price)
 
-                    # Choose the method that gives reasonable diversification
-                    # Priority: Diversification > Risk management > Performance
+                    # Choose allocation method
                     if equal_weight_shares > 0 and equal_weight_amount <= max_position_amount:
-                        # Use equal weight if it's within limits
                         final_shares = min(equal_weight_shares, risk_based_shares, max_position_shares)
-                        method_used = "Equal Weight"
                     elif score_weighted_shares > 0 and score_weighted_amount <= max_position_amount:
-                        # Use score-weighted if equal weight doesn't work
                         final_shares = min(score_weighted_shares, risk_based_shares, max_position_shares)
-                        method_used = "Score Weighted"
                     else:
-                        # Fall back to risk-based
                         final_shares = min(risk_based_shares, max_position_shares)
-                        method_used = "Risk Based"
 
                     if final_shares <= 0:
                         continue
 
                     final_amount = final_shares * current_price
 
-                    # Check if we have enough remaining capital
+                    # Check remaining capital
                     if total_allocated + final_amount > total_capital:
-                        # Try to allocate remaining capital
                         remaining_capital = total_capital - total_allocated
                         if remaining_capital >= current_price:
                             final_shares = int(remaining_capital / current_price)
                             final_amount = final_shares * current_price
-                            method_used = "Remaining Capital"
                         else:
                             continue
 
-                    # Calculate actual risk for this position
                     actual_risk = final_shares * risk_per_share
-                    risk_percentage = (actual_risk / total_capital) * 100
+                    allocation_pct = (final_amount / total_capital) * 100
 
                     total_allocated += final_amount
                     position_count += 1
 
                     company_name = result.get('company_name', result.get('symbol', 'Unknown'))
-                    company_short = company_name[:23] + "..." if len(company_name) > 25 else company_name
 
+                    # CRITICAL: Build structured data with exact numeric types
                     portfolio_data.append({
+                        'rank': i,
                         'symbol': result.get('symbol', 'Unknown'),
                         'company': company_name,
-                        'score': swing_score,
-                        'amount': final_amount,
-                        'sector': result.get('sector', 'Unknown'),
-                        'shares': final_shares,
-                        'risk': actual_risk,
-                        'method': method_used
+                        'score': float(swing_score),
+                        'price': float(current_price),  # NUMERIC
+                        'stop_loss': float(stop_loss),  # NUMERIC
+                        'allocation_pct': float(allocation_pct),  # NUMERIC (8.1, not "8.1%")
+                        'investment_amount': float(final_amount),
+                        'number_of_shares': int(final_shares),
+                        'risk': float(actual_risk),
+                        'sector': result.get('sector', 'Unknown')
                     })
 
-                    allocation_pct = (final_amount / total_capital) * 100
-
+                    # Console output (keep for logging)
+                    company_short = company_name[:23] + "..." if len(company_name) > 25 else company_name
                     print(f"{i:<4} {result.get('symbol', 'Unk'):<12} {company_short:<25} "
                           f"{swing_score:<6.0f} ₹{current_price:<9.2f} ₹{stop_loss:<9.2f} "
                           f"{allocation_pct:<11.1f}% {final_shares:<8} ₹{actual_risk:<11,.0f}")
 
                 except Exception as e:
-                    logger.error(f"Error processing stock {i} in portfolio allocation: {str(e)}")
+                    logger.error(f"Error processing stock {i}: {str(e)}")
                     continue
 
             if not portfolio_data:
-                print(f"\nCould not allocate any positions based on current constraints.")
+                logger.error("Could not allocate any positions")
                 return None
 
-            # Calculate portfolio statistics
+            # Console summary (keep for logging)
             avg_score = sum(r['score'] for r in portfolio_data) / len(portfolio_data)
             total_risk = sum(r['risk'] for r in portfolio_data)
-            portfolio_risk_pct = (total_risk / total_capital) * 100
 
-            # Sector allocation
-            sector_allocation = {}
-            for stock in portfolio_data:
-                sector = stock.get('sector', 'Unknown')
-                sector_allocation[sector] = sector_allocation.get(sector, 0) + stock['amount']
-
-            for sector in sector_allocation:
-                sector_allocation[sector] = (sector_allocation[sector] / total_allocated) * 100
-
-            print(f"\nIMPROVED PORTFOLIO SUMMARY")
+            print(f"\nPORTFOLIO SUMMARY")
             print("-" * 50)
-            print(f"Total Budget: Rs.{total_capital:,.2f}")
             print(f"Total Allocated: Rs.{total_allocated:,.2f} ({total_allocated / total_capital * 100:.1f}%)")
-            print(f"Number of Positions: {len(portfolio_data)}")
-            print(f"Average Score: {avg_score:.1f}/100")
-            print(f"Total Portfolio Risk: Rs.{total_risk:,.2f} ({portfolio_risk_pct:.1f}% of capital)")
-            print(f"Portfolio Risk Level: {risk_appetite}")
+            print(f"Positions: {len(portfolio_data)}")
+            print(f"Avg Score: {avg_score:.1f}/100")
+            print(f"Total Risk: Rs.{total_risk:,.2f}")
 
-            if sector_allocation:
-                print(f"\nSECTOR DIVERSIFICATION")
-                print("-" * 30)
-                for sector, allocation in sorted(sector_allocation.items(), key=lambda x: x[1], reverse=True):
-                    print(f"{sector}: {allocation:.1f}%")
-
-            # Risk analysis
-            print(f"\nRISK ANALYSIS")
-            print("-" * 15)
-            print(f"Individual Position Risk: {portfolio_risk_pct / len(portfolio_data):.1f}% avg per position")
-            print(
-                f"Largest Position: {max(stock['amount'] for stock in portfolio_data) / total_capital * 100:.1f}% of capital")
-            print(
-                f"Smallest Position: {min(stock['amount'] for stock in portfolio_data) / total_capital * 100:.1f}% of capital")
-
-            # Allocation methods used
-            method_count = {}
-            for stock in portfolio_data:
-                method = stock.get('method', 'Unknown')
-                method_count[method] = method_count.get(method, 0) + 1
-
-            if method_count:
-                print(f"\nALLOCATION METHODS USED")
-                print("-" * 25)
-                for method, count in method_count.items():
-                    print(f"{method}: {count} positions")
-
+            # Return ONLY the structured list (no text, no extra dict)
             return portfolio_data
 
         except Exception as e:
-            logger.error(f"Error generating improved portfolio allocation: {str(e)}")
+            logger.error(f"Error generating portfolio: {str(e)}")
             return None
 
     def get_single_best_recommendation(self, results):
